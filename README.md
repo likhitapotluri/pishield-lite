@@ -46,14 +46,14 @@ When an instruction-tuned LLM reads plain, benign text, its internal residual st
 
 ## Results
 
-All numbers below come from one run on a free Colab T4 (Mistral-7B-Instruct-v0.2, layer 5, fixed 0.5 threshold, no tuning on the test split). Test set: the `deepset/prompt-injections` test split (116 prompts: 56 clean, 60 injected; some prompts are German). Raw numbers: [`results/deepset_benchmark.csv`](./results/deepset_benchmark.csv).
+All numbers below come from one run on a free Colab T4 (Mistral-7B-Instruct-v0.2, layer 5, fixed 0.5 threshold, no tuning on the test split). Test set: the `deepset/prompt-injections` test split (116 prompts: 56 clean, 60 injected; 65 English, 46 German, 5 other). Raw numbers: [`results/deepset_benchmark.csv`](./results/deepset_benchmark.csv); per-prompt scores for every method: [`results/deepset_per_prompt.csv`](./results/deepset_per_prompt.csv).
 
 | Method | FPR | FNR | AUC | Accuracy | Median latency |
 |---|---|---|---|---|---|
-| PIShield, transfer (probe trained on 100 hand-written prompts) | 10.7% | 38.3% | 0.849 | 75.0% | 16.4 ms |
-| PIShield, in-domain (probe trained on deepset train, 546 prompts) | 1.8% | 10.0% | 0.998 | 94.0% | 16.4 ms |
-| DeBERTa-v3 `protectai` v2 (zero-shot, **CPU**) | 0.0% | 63.3% | 0.896 | 67.2% | 281 ms (CPU, not comparable) |
-| TF-IDF + logistic regression (trained on deepset train) | 0.0% | 38.3% | 0.945 | 80.2% | 0.9 ms |
+| PIShield, transfer (probe trained on 100 hand-written prompts) | 10.7% | 38.3% | 0.849 | 75.0% | 16.8 ms |
+| PIShield, in-domain (probe trained on deepset train, 546 prompts) | 1.8% | 10.0% | 0.998 | 94.0% | 16.8 ms |
+| DeBERTa-v3 `protectai` v2 (zero-shot, **CPU**) | 0.0% | 63.3% | 0.896 | 67.2% | 286 ms (CPU, not comparable) |
+| TF-IDF + logistic regression (trained on deepset train) | 0.0% | 38.3% | 0.945 | 80.2% | 1.5 ms |
 
 Latency of the layer-5 early exit versus a full 32-layer forward pass (same probability from both paths, 20 runs, CUDA-synchronized, one short prompt):
 
@@ -62,12 +62,12 @@ Latency of the layer-5 early exit versus a full 32-layer forward pass (same prob
 | Naive (full pass) | 533.5 ms | 511.8 ms |
 | Early exit | 29.5 ms | 23.4 ms |
 
-That is about 22x faster at the median. The spec's <15 ms target is **not met** on this hardware (the 16.4 ms figure above is the median over deepset prompts; 23.4 ms is for the single prompt in the latency test).
+That is about 22x faster at the median. The spec's <15 ms target is **not met** on this hardware (the 16.8 ms figure above is the median over 50 deepset prompts; 23.4 ms is for the single prompt in the latency test).
 
 What these results do and don't show:
 - **The 100 hand-written prompts do not transfer.** A probe trained only on them reaches AUC 0.849 with a 38% miss rate on deepset, far from the spec's FPR < 1% / FNR < 3%.
-- **Activations carry more than keywords, on this data.** With the same training data, the layer-5 probe beats TF-IDF (AUC 0.998 vs 0.945, accuracy 94% vs 80%). Caveats: one split of 116 prompts, no confidence intervals, and German text handicaps a bag-of-words baseline.
-- **The DeBERTa number is a zero-shot, fixed-threshold result,** so it is not a comparison with a model trained on this data, and its latency was measured on CPU.
+- **Activations carry more than keywords, on this data.** With the same training data, the layer-5 probe beats TF-IDF: AUC 0.998 vs 0.945 (bootstrap 95% CI of the difference: +0.018 to +0.094), and an exact McNemar test on per-prompt correctness gives p = 8.6e-4 (19 prompts only PIShield got right vs 3 only TF-IDF got right). The gap holds on the English-only subset (AUC 1.000 vs 0.930). Caveat: one split of 116 prompts.
+- **The DeBERTa number is a zero-shot, fixed-threshold result,** and its latency was measured on CPU. It misses more on English prompts (FNR 71%) than on non-English ones, so language is not the explanation; deepset labels role-play and off-task instructions as injections, which DeBERTa was not trained to flag. See `RESULTS.md` section 10.
 
 Full methodology, layer-selection process, and every intermediate result are documented step-by-step in [`PIShield-Lite.ipynb`](./PIShield-Lite.ipynb).
 
@@ -107,9 +107,12 @@ print(result)
 
 ## Honest limitations & future work
 
-- **Dataset scale:** the probe is trained on 100 synthetic examples (50 clean / 50 injected). This is small relative to the 4096-dimensional activation vectors, which risks overfitting to our specific phrasing style. Next step: integrate a standard benchmark such as [Microsoft BIPIA](https://github.com/microsoft/BIPIA) (indirect attacks) or `deepset/prompt-injections` / PromptBench (direct jailbreaks) from Hugging Face Datasets to scale to hundreds/thousands of examples across more real-world contexts.
-- **Last-token vs. mean-pooled activations:** the probe currently reads only the final token's hidden state. Research on activation probing suggests mean-pooling across all prompt tokens may be more robust to adversarial suffix/padding attacks — untested here.
-- **Latency floor on free-tier hardware:** the ~20ms result is dominated by fixed Python/CUDA dispatch and CPU-transfer overhead, not by compute — it's expected to drop well under the 15ms target on production-grade GPUs (A100/H100) or with a lower-level (non-scikit-learn) inference path. We tested truncating inputs to `max_length=512` as a possible fix; it made no measurable difference (see `RESULTS.md`), confirming tokenization wasn't the bottleneck.
+- **Generalisation:** a probe trained on the 100 hand-written prompts does not transfer to `deepset/prompt-injections` (AUC 0.849). The in-domain result comes from one public benchmark with a 116-prompt test split; [Microsoft BIPIA](https://github.com/microsoft/BIPIA) (indirect injections) is the next benchmark to add.
+- **One model, one layer:** only Mistral-7B-Instruct-v0.2 and layer 5 are evaluated; layer selection was done on the hand-written set.
+- **Last-token vs. mean-pooled activations:** the probe reads only the final token's hidden state. Mean-pooling across prompt tokens is untested.
+- **Adaptive attacks:** no attacker who knows about the probe was evaluated.
+- **Latency:** the early-exit median is 16.8–23.4 ms on a free-tier T4, above the 15 ms target. Where the remaining time goes (Python/CUDA dispatch, device-to-host copy, scikit-learn) has not been profiled. Input truncation to `max_length=512` did not help (see `RESULTS.md`).
+- **Duplicated prefill:** the check runs as a separate pass, so a clean prompt is prefilled twice for the first five layers; reusing that KV cache is future work.
 
 ## Credit
 
