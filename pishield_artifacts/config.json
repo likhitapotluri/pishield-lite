@@ -1,0 +1,5 @@
+{
+  "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+  "critical_layer": 5,
+  "threshold": 0.5
+}

@@ -26,7 +26,7 @@ When an instruction-tuned LLM reads plain, benign text, its internal residual st
                  │  Forward pass, stopped early at Layer 5
                  ▼
    ┌───────────────────────────┐
-   │ Hidden State Extractor    │   <- forward hook on model.model.layers[5]
+   │ Hidden State Extractor    │   <- forward hook on model.model.layers[4]
    └─────────────┬─────────────┘
                  │  Final-token activation vector (4096-dim)
                  ▼
@@ -42,18 +42,32 @@ When an instruction-tuned LLM reads plain, benign text, its internal residual st
  Continue generation   ABORT + raise alert
 ```
 
-**Key implementation detail — true early exit:** the forward hook on Layer 5 deliberately raises a Python exception the instant it captures the activation, which aborts the rest of the forward pass. This means layers 6–32 are genuinely never computed, not just ignored — this is what gives the ~19x speedup measured below.
+**Key implementation detail — true early exit:** the forward hook on Layer 5 deliberately raises a Python exception the instant it captures the activation, which aborts the rest of the forward pass. This means layers 6–32 are genuinely never computed, not just ignored — this is what produces the speedup over a full forward pass (measured in Step 13b of the notebook).
 
 ## Results
 
-| Metric | Target (from spec) | Result |
+All numbers below come from one run on a free Colab T4 (Mistral-7B-Instruct-v0.2, layer 5, fixed 0.5 threshold, no tuning on the test split). Test set: the `deepset/prompt-injections` test split (116 prompts: 56 clean, 60 injected; some prompts are German). Raw numbers: [`results/deepset_benchmark.csv`](./results/deepset_benchmark.csv).
+
+| Method | FPR | FNR | AUC | Accuracy | Median latency |
+|---|---|---|---|---|---|
+| PIShield, transfer (probe trained on 100 hand-written prompts) | 10.7% | 38.3% | 0.849 | 75.0% | 16.4 ms |
+| PIShield, in-domain (probe trained on deepset train, 546 prompts) | 1.8% | 10.0% | 0.998 | 94.0% | 16.4 ms |
+| DeBERTa-v3 `protectai` v2 (zero-shot, **CPU**) | 0.0% | 63.3% | 0.896 | 67.2% | 281 ms (CPU, not comparable) |
+| TF-IDF + logistic regression (trained on deepset train) | 0.0% | 38.3% | 0.945 | 80.2% | 0.9 ms |
+
+Latency of the layer-5 early exit versus a full 32-layer forward pass (same probability from both paths, 20 runs, CUDA-synchronized, one short prompt):
+
+| Path | Mean | Median |
 |---|---|---|
-| Injection-Critical Layer | — | Layer 5 of 32 |
-| False Positive Rate (FPR) | < 1% | **0.0%** on held-out test set |
-| False Negative Rate (FNR) | < 3% | **0.0%** on held-out test set |
-| Adversarial benchmark (jailbreaks + indirect RAG + clean controls) | — | **15/15 (100%)** |
-| Detection latency (median, CUDA-synchronized) | < 15ms | **~20ms** on free-tier Colab T4 GPU |
-| Speedup vs. naive full 32-layer forward pass | — | **~19x faster** (~440ms → ~20ms) |
+| Naive (full pass) | 533.5 ms | 511.8 ms |
+| Early exit | 29.5 ms | 23.4 ms |
+
+That is about 22x faster at the median. The spec's <15 ms target is **not met** on this hardware (the 16.4 ms figure above is the median over deepset prompts; 23.4 ms is for the single prompt in the latency test).
+
+What these results do and don't show:
+- **The 100 hand-written prompts do not transfer.** A probe trained only on them reaches AUC 0.849 with a 38% miss rate on deepset, far from the spec's FPR < 1% / FNR < 3%.
+- **Activations carry more than keywords, on this data.** With the same training data, the layer-5 probe beats TF-IDF (AUC 0.998 vs 0.945, accuracy 94% vs 80%). Caveats: one split of 116 prompts, no confidence intervals, and German text handicaps a bag-of-words baseline.
+- **The DeBERTa number is a zero-shot, fixed-threshold result,** so it is not a comparison with a model trained on this data, and its latency was measured on CPU.
 
 Full methodology, layer-selection process, and every intermediate result are documented step-by-step in [`PIShield-Lite.ipynb`](./PIShield-Lite.ipynb).
 

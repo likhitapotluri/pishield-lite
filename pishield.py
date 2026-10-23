@@ -78,9 +78,11 @@ class PIShieldProbe:
         onto its target device(s).
     tokenizer : the matching Hugging Face tokenizer.
     critical_layer : int
-        Index into `model.model.layers` of the "injection-critical layer" ---
-        the layer found (via cross-validated probing) to best separate clean
-        from injected activations. See RESULTS.md for how this was chosen.
+        Index into the model's `output_hidden_states` tuple, i.e. the same
+        indexing used when the probe was trained: 0 = embedding output,
+        k = output of transformer block k (`model.model.layers[k - 1]`).
+        Must be >= 1. The forward hook is therefore registered on
+        `model.model.layers[critical_layer - 1]`.
     classifier : a fitted scikit-learn-compatible classifier (or Pipeline)
         exposing `.predict_proba(X)`. Expected to have been trained on
         activation vectors extracted from `critical_layer` using this same
@@ -90,6 +92,11 @@ class PIShieldProbe:
     """
 
     def __init__(self, model, tokenizer, critical_layer: int, classifier, threshold: float = 0.5):
+        if critical_layer < 1:
+            raise ValueError(
+                "critical_layer indexes output_hidden_states; 0 is the embedding "
+                "output, which has no transformer block to hook. Use >= 1."
+            )
         self.model = model
         self.tokenizer = tokenizer
         self.critical_layer = critical_layer
@@ -107,7 +114,10 @@ class PIShieldProbe:
         """
         inputs = self.tokenizer(text_prompt, return_tensors="pt").to(self.model.device)
 
-        target_layer = self.model.model.layers[self.critical_layer]
+        # hidden_states[k] is the output of layers[k - 1] (hidden_states[0] is the
+        # embedding output), so hook layers[critical_layer - 1] to capture exactly
+        # the vector the probe was trained on.
+        target_layer = self.model.model.layers[self.critical_layer - 1]
         hook_handle = target_layer.register_forward_hook(self._hook_fn)
 
         try:
@@ -115,7 +125,7 @@ class PIShieldProbe:
                 _ = self.model(**inputs)  # interrupted by EarlyExitException
             raise RuntimeError(
                 "Expected early exit did not occur -- the forward hook never fired. "
-                "Check that `critical_layer` is a valid index into model.model.layers."
+                "Check that `critical_layer` is between 1 and the number of transformer layers."
             )
         except EarlyExitException as e:
             activation = e.activation

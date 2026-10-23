@@ -121,7 +121,7 @@ class PIShieldProbe:
         return bool(prediction[0])
 ```
 
-> **Note:** the final implementation in `pishield.py` deviates from this blueprint in two deliberate ways: (1) training and inference are separated — the classifier is trained offline and a frozen, pre-trained pipeline is passed into the class, matching real deployment practice; and (2) the hook uses an exception-based true early exit so layers after the critical layer are never computed, rather than letting the full forward pass run to completion. See `RESULTS.md` for the measured impact of this change (~19x latency improvement).
+> **Note:** the final implementation in `pishield.py` deviates from this blueprint in two deliberate ways: (1) training and inference are separated — the classifier is trained offline and a frozen, pre-trained pipeline is passed into the class, matching real deployment practice; and (2) the hook uses an exception-based true early exit so layers after the critical layer are never computed, rather than letting the full forward pass run to completion. See `RESULTS.md` for the measured impact of this change (an earlier run measured ~19x, pending re-measurement after the layer-alignment fix).
 
 ## Required Deliverables & Expected Outputs
 
