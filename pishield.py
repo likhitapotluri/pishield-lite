@@ -63,8 +63,9 @@ class PIShieldProbe:
     Runtime prompt-injection intercept for open-weights LLMs.
 
     Hooks into a chosen transformer layer during the prefill forward pass,
-    extracts the final-token hidden state, and classifies it as clean or
-    injected before any text/tool-call generation happens.
+    pools that layer's hidden states into one vector (mean over prompt tokens,
+    or the final token), and classifies it as clean or injected before any
+    text/tool-call generation happens.
 
     Uses a true early-exit: a forward hook on `critical_layer` raises an
     internal exception the moment it captures the activation, which aborts
@@ -89,28 +90,45 @@ class PIShieldProbe:
         class's extraction method.
     threshold : float, default 0.5
         Probability threshold above which a prompt is flagged as injected.
+    pooling : {"last", "mean"}, default "last"
+        How the critical layer's hidden states are reduced to one vector.
+        "mean" averages over all prompt tokens except the BOS token and is the
+        recommended setting: a last-token probe misses about a third of
+        injections once a benign sentence is appended after them, while the
+        mean-pooled probe does not (see RESULTS.md section 12). "last" keeps
+        the original behaviour and matches `pishield_artifacts/probe.joblib`.
+        The classifier must have been trained with the same pooling.
     """
 
-    def __init__(self, model, tokenizer, critical_layer: int, classifier, threshold: float = 0.5):
+    def __init__(self, model, tokenizer, critical_layer: int, classifier,
+                 threshold: float = 0.5, pooling: str = "last"):
         if critical_layer < 1:
             raise ValueError(
                 "critical_layer indexes output_hidden_states; 0 is the embedding "
                 "output, which has no transformer block to hook. Use >= 1."
             )
+        if pooling not in ("last", "mean"):
+            raise ValueError("pooling must be 'last' or 'mean'")
         self.model = model
         self.tokenizer = tokenizer
         self.critical_layer = critical_layer
         self.classifier = classifier
         self.threshold = threshold
+        self.pooling = pooling
 
     def _hook_fn(self, module, input, output):
         hidden_states = output[0] if isinstance(output, tuple) else output
-        activation = hidden_states[0, -1, :].detach().cpu().float().numpy()
-        raise EarlyExitException(activation)
+        h = hidden_states[0]  # (seq_len, hidden)
+        if self.pooling == "mean":
+            # Skip the BOS token (very large norm in Mistral) unless it is the only token.
+            vec = h[1:].mean(dim=0) if h.shape[0] > 1 else h[0]
+        else:
+            vec = h[-1]
+        raise EarlyExitException(vec.detach().float().cpu().numpy())
 
     def extract_prefill_representation(self, text_prompt: str):
         """Run a forward pass up to (and including) `critical_layer` only,
-        and return that layer's final-token activation vector as a numpy array.
+        and return that layer's pooled activation vector as a numpy array.
         """
         inputs = self.tokenizer(text_prompt, return_tensors="pt").to(self.model.device)
 
@@ -143,6 +161,7 @@ class PIShieldProbe:
             is_injected : bool
             probability : float, the classifier's P(injected)
             layer_used  : int, the critical layer index used for detection
+            pooling     : str, "last" or "mean"
         """
         activation = self.extract_prefill_representation(text_prompt)
         prob = self.classifier.predict_proba([activation])[0, 1]
@@ -151,4 +170,5 @@ class PIShieldProbe:
             "is_injected": bool(is_injected),
             "probability": float(prob),
             "layer_used": self.critical_layer,
+            "pooling": self.pooling,
         }
