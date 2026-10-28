@@ -1,0 +1,7 @@
+{
+  "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+  "critical_layer": 5,
+  "pooling": "mean",
+  "threshold": 0.5,
+  "trained_on": "deepset/prompt-injections train split (546 prompts)"
+}
