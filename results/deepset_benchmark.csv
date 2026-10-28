@@ -1,5 +1,5 @@
 method,FPR,FNR,AUC,accuracy,FP,FN,median_ms,mean_ms
-PIShield (transfer: trained on 100 hand-written),0.1071,0.3833,0.8488,0.75,6,23,16.8273,17.3876
-PIShield (in-domain: trained on deepset train),0.0179,0.1,0.9982,0.9397,1,6,16.8273,17.3876
-"DeBERTa-v3 protectai v2 (zero-shot, device=cpu)",0.0,0.6333,0.8957,0.6724,0,38,286.0645,306.2819
-TF-IDF + LR (trained on deepset train),0.0,0.3833,0.9452,0.8017,0,23,1.4859,1.6078
+PIShield (transfer: trained on 100 hand-written),0.1071,0.3833,0.8488,0.75,6,23,16.183,17.02
+PIShield (in-domain: trained on deepset train),0.0179,0.1,0.9982,0.9397,1,6,16.183,17.02
+"DeBERTa-v3 protectai v2 (zero-shot, device=cpu)",0.0,0.6333,0.8957,0.6724,0,38,261.371,276.885
+TF-IDF + LR (trained on deepset train),0.0,0.3833,0.9452,0.8017,0,23,0.852,0.881
